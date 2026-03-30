@@ -1,0 +1,125 @@
+name: Agent Signal Processing
+
+on:
+  repository_dispatch:
+    types: [agent-signal]
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: 'Agent name (logos, nova, ember, vault)'
+        required: true
+        type: string
+      action:
+        description: 'Action type (chapter_complete, research_verified, chapter_locked, verification_complete)'
+        required: true
+        type: string
+      chapter:
+        description: 'Chapter number (if applicable)'
+        required: false
+        type: string
+      timestamp:
+        description: 'ISO timestamp of signal'
+        required: true
+        type: string
+
+jobs:
+  process-signal:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+    
+    - name: Log signal receipt
+      run: |
+        echo "📡 Agent Signal Received"
+        echo "Agent: ${{ github.event.inputs.agent || github.event.client_payload.agent }}"
+        echo "Action: ${{ github.event.inputs.action || github.event.client_payload.action }}"
+        echo "Chapter: ${{ github.event.inputs.chapter || github.event.client_payload.chapter || 'N/A' }}"
+        echo "Timestamp: ${{ github.event.inputs.timestamp || github.event.client_payload.timestamp }}"
+        
+        # Create signal log entry
+        SIGNAL_LOG="github/signal-log.json"
+        if [ ! -f "$SIGNAL_LOG" ]; then
+          echo '{"signals": []}' > "$SIGNAL_LOG"
+        fi
+        
+        # Add new signal
+        jq --arg agent "${{ github.event.inputs.agent || github.event.client_payload.agent }}" \
+           --arg action "${{ github.event.inputs.action || github.event.client_payload.action }}" \
+           --arg chapter "${{ github.event.inputs.chapter || github.event.client_payload.chapter || 'N/A' }}" \
+           --arg timestamp "${{ github.event.inputs.timestamp || github.event.client_payload.timestamp }}" \
+           --arg run_id "$GITHUB_RUN_ID" \
+           '.signals += [{
+             "agent": $agent,
+             "action": $action,
+             "chapter": $chapter,
+             "timestamp": $timestamp,
+             "github_run_id": $run_id,
+             "processed_at": (now | todateiso8601)
+           }]' "$SIGNAL_LOG" > tmp.json && mv tmp.json "$SIGNAL_LOG"
+    
+    - name: Create commit for signal
+      run: |
+        # Configure git
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        
+        # Create branch for signal if needed
+        BRANCH_NAME="signal/${{ github.event.inputs.agent || github.event.client_payload.agent }}-${{ github.event.inputs.action || github.event.client_payload.action }}-${{ github.run_id }}"
+        git checkout -b "$BRANCH_NAME"
+        
+        # Add signal log
+        git add github/signal-log.json
+        
+        # Create commit
+        COMMIT_MSG="[SIGNAL] ${{ github.event.inputs.agent || github.event.client_payload.agent }} ${{ github.event.inputs.action || github.event.client_payload.action }} - Signal processed
+        
+Agent: ${{ github.event.inputs.agent || github.event.client_payload.agent }}
+Action: ${{ github.event.inputs.action || github.event.client_payload.action }}
+Chapter: ${{ github.event.inputs.chapter || github.event.client_payload.chapter || 'N/A' }}
+Timestamp: ${{ github.event.inputs.timestamp || github.event.client_payload.timestamp }}
+GitHub Run: $GITHUB_RUN_ID
+        
+Signal processed via GitHub Actions workflow."
+        
+        git commit -m "$COMMIT_MSG"
+        
+        # Push to repository
+        git push origin "$BRANCH_NAME"
+        
+        echo "✅ Signal processed and committed to branch: $BRANCH_NAME"
+    
+    - name: Create Pull Request
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        branch: ${{ env.BRANCH_NAME }}
+        base: main
+        title: "[SIGNAL] ${{ github.event.inputs.agent || github.event.client_payload.agent }} - ${{ github.event.inputs.action || github.event.client_payload.action }}"
+        body: |
+          ## Agent Signal Processed
+          
+          **Agent:** ${{ github.event.inputs.agent || github.event.client_payload.agent }}
+          **Action:** ${{ github.event.inputs.action || github.event.client_payload.action }}
+          **Chapter:** ${{ github.event.inputs.chapter || github.event.client_payload.chapter || 'N/A' }}
+          **Timestamp:** ${{ github.event.inputs.timestamp || github.event.client_payload.timestamp }}
+          
+          This PR was automatically created when the agent signaled completion of their task.
+          
+          ### Signal Details
+          - GitHub Run ID: $GITHUB_RUN_ID
+          - Processed At: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          
+          ### Next Steps
+          1. Review signal details
+          2. Merge to track signal history
+          3. Agent will be notified of successful processing
+          
+          ---
+          
+          *This PR was automatically generated by the Agent Signal Processing workflow.*
+        labels: "signal, automated-pr"
+        delete-branch: true

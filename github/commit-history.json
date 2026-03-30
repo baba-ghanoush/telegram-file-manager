@@ -1,0 +1,22 @@
+{
+  "commits": [],
+  "metadata": {
+    "created_at": "2026-03-25T17:44:00Z",
+    "version": "1.0.0",
+    "description": "History of all commits made on behalf of agents",
+    "commit_categories": {
+      "signal": "Commit triggered by agent signal",
+      "chapter": "Chapter-related changes",
+      "research": "Research verification changes",
+      "process": "Process/protocol changes",
+      "infrastructure": "GitHub workflow/infrastructure changes"
+    },
+    "quality_metrics": {
+      "agent_attribution": "Must include agent who performed work",
+      "action_description": "Must describe what action was taken",
+      "timestamp": "Must include ISO timestamp",
+      "chapter_reference": "Must reference chapter if applicable",
+      "change_summary": "Must summarize what changed"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "signals": [],
+  "metadata": {
+    "created_at": "2026-03-25T17:44:00Z",
+    "version": "1.0.0",
+    "description": "Log of all agent signals for GitHub commit-on-signal protocol",
+    "agent_mapping": {
+      "logos": "Master Novelist - Drafting chapters",
+      "nova": "Truth Protector - Research verification",
+      "ember": "Process Overseer - Chapter locking",
+      "vault": "Quality Verifier - Ollama verification"
+    },
+    "action_types": {
+      "chapter_complete": "Chapter drafting completed",
+      "research_verified": "Research facts verified",
+      "chapter_locked": "Chapter locked for publication",
+      "verification_complete": "Ollama verification completed",
+      "process_milestone": "Process milestone reached",
+      "error_occurred": "Error requiring attention"
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "chapters": {},
+  "metadata": {
+    "created_at": "2026-03-25T17:44:00Z",
+    "version": "1.0.0",
+    "description": "Tracking status of all chapters in The Story of Bluejay",
+    "status_definitions": {
+      "draft": "Chapter being drafted by Logos",
+      "verify": "Research verification by Nova",
+      "lock": "Chapter locked by Ember",
+      "published": "Published to main branch"
+    },
+    "quality_standards": {
+      "emotional_engine": "Must implement chapter emotional engine",
+      "no_go_respected": "Must respect chapter no-go list",
+      "timeline_accuracy": "Must match verified timeline",
+      "character_consistency": "Must maintain character consistency",
+      "voice_alignment": "Must align with voice bible"
+    }
+  }
+}
