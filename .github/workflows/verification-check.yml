@@ -2,7 +2,6 @@ name: Verification Check
 
 on:
   schedule:
-    # Daily at 9:00 AM PDT (16:00 UTC)
     - cron: '0 16 * * *'
   workflow_dispatch:
     inputs:
@@ -11,217 +10,179 @@ on:
         required: false
         type: string
 
+permissions:
+  contents: write
+  pull-requests: read
+
 jobs:
   verification-check:
     runs-on: ubuntu-latest
-    
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
-      with:
-        fetch-depth: 0
-    
-    - name: Load verification status
-      id: load-status
-      run: |
-        STATUS_FILE="github/chapter-status.json"
-        if [ ! -f "$STATUS_FILE" ]; then
-          echo '{"chapters": {}}' > "$STATUS_FILE"
-          echo "status_file_created=true" >> $GITHUB_OUTPUT
-        else
-          echo "status_file_created=false" >> $GITHUB_OUTPUT
-        fi
-        
-        # Get chapters needing verification
-        CHAPTERS_NEEDING_VERIFICATION=$(jq -r '.chapters | to_entries[] | select(.value.last_action == "draft" or .value.last_action == "verify") | .key' "$STATUS_FILE" 2>/dev/null || echo "")
-        echo "chapters_needing_verification=$CHAPTERS_NEEDING_VERIFICATION" >> $GITHUB_OUTPUT
-        
-        # Count total chapters
-        TOTAL_CHAPTERS=$(jq -r '.chapters | length' "$STATUS_FILE" 2>/dev/null || echo "0")
-        echo "total_chapters=$TOTAL_CHAPTERS" >> $GITHUB_OUTPUT
-    
-    - name: Run verification checks
-      id: verify
-      run: |
-        echo "🔍 Running Verification Checks"
-        echo "=============================="
-        
-        VERIFICATION_RESULTS="github/verification-results-$(date +%Y%m%d).json"
-        echo '{"timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'", "checks": []}' > "$VERIFICATION_RESULTS"
-        
-        # Check 1: Signal log consistency
-        SIGNAL_LOG="github/signal-log.json"
-        if [ -f "$SIGNAL_LOG" ]; then
-          SIGNAL_COUNT=$(jq '.signals | length' "$SIGNAL_LOG")
-          echo "✅ Signal log: $SIGNAL_COUNT signals"
-          jq --arg check "signal_log" \
-             --arg status "pass" \
-             --arg count "$SIGNAL_COUNT" \
-             '.checks += [{"check": $check, "status": $status, "details": {"signal_count": $count}}]' \
-             "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
-        else
-          echo "❌ Signal log missing"
-          jq --arg check "signal_log" \
-             --arg status "fail" \
-             '.checks += [{"check": $check, "status": $status, "details": {"error": "Signal log file not found"}}]' \
-             "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
-        fi
-        
-        # Check 2: Chapter status consistency
-        STATUS_FILE="github/chapter-status.json"
-        if [ -f "$STATUS_FILE" ]; then
-          CHAPTER_COUNT=$(jq '.chapters | length' "$STATUS_FILE")
-          DRAFT_COUNT=$(jq '.chapters | to_entries[] | select(.value.last_action == "draft") | .key' "$STATUS_FILE" | wc -l)
-          LOCKED_COUNT=$(jq '.chapters | to_entries[] | select(.value.last_action == "lock") | .key' "$STATUS_FILE" | wc -l)
-          
-          echo "✅ Chapter status: $CHAPTER_COUNT chapters total"
-          echo "   - Draft: $DRAFT_COUNT"
-          echo "   - Locked: $LOCKED_COUNT"
-          
-          jq --arg check "chapter_status" \
-             --arg status "pass" \
-             --arg total "$CHAPTER_COUNT" \
-             --arg draft "$DRAFT_COUNT" \
-             --arg locked "$LOCKED_COUNT" \
-             '.checks += [{"check": $check, "status": $status, "details": {"total": $total, "draft": $draft, "locked": $locked}}]' \
-             "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
-        else
-          echo "❌ Chapter status file missing"
-          jq --arg check "chapter_status" \
-             --arg status "fail" \
-             '.checks += [{"check": $check, "status": $status, "details": {"error": "Chapter status file not found"}}]' \
-             "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
-        fi
-        
-        # Check 3: Open PRs
-        PR_COUNT=$(gh pr list --state open --json number --jq length 2>/dev/null || echo "0")
-        if [ "$PR_COUNT" -gt 0 ]; then
-          echo "⚠️  Open PRs: $PR_COUNT (needs review)"
-          PR_LIST=$(gh pr list --state open --json title,url --jq '.[] | "- [\(.title)](\(.url))"' 2>/dev/null || echo "Could not fetch PR list")
-          
-          jq --arg check "open_prs" \
-             --arg status "warning" \
-             --arg count "$PR_COUNT" \
-             --argjson pr_list "$(echo "$PR_LIST" | jq -R -s -c 'split("\n")')" \
-             '.checks += [{"check": $check, "status": $status, "details": {"count": $count, "pr_list": $pr_list}}]' \
-             "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
-        else
-          echo "✅ No open PRs"
-          jq --arg check "open_prs" \
-             --arg status "pass" \
-             '.checks += [{"check": $check, "status": $status, "details": {"count": 0}}]' \
-             "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
-        fi
-        
-        # Check 4: Branch hygiene
-        BRANCH_COUNT=$(git branch -r | grep -v "origin/main" | grep -v "origin/HEAD" | wc -l)
-        if [ "$BRANCH_COUNT" -gt 10 ]; then
-          echo "⚠️  Many branches: $BRANCH_COUNT (consider cleanup)"
-          jq --arg check "branch_hygiene" \
-             --arg status "warning" \
-             --arg count "$BRANCH_COUNT" \
-             '.checks += [{"check": $check, "status": $status, "details": {"count": $count, "threshold": 10}}]' \
-             "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
-        else
-          echo "✅ Branch hygiene: $BRANCH_COUNT branches"
-          jq --arg check "branch_hygiene" \
-             --arg status "pass" \
-             --arg count "$BRANCH_COUNT" \
-             '.checks += [{"check": $check, "status": $status, "details": {"count": $count}}]' \
-             "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
-        fi
-        
-        # Calculate overall status
-        PASS_COUNT=$(jq '.checks | map(select(.status == "pass")) | length' "$VERIFICATION_RESULTS")
-        FAIL_COUNT=$(jq '.checks | map(select(.status == "fail")) | length' "$VERIFICATION_RESULTS")
-        WARN_COUNT=$(jq '.checks | map(select(.status == "warning")) | length' "$VERIFICATION_RESULTS")
-        TOTAL_CHECKS=$(jq '.checks | length' "$VERIFICATION_RESULTS")
-        
-        OVERALL_STATUS="pass"
-        if [ "$FAIL_COUNT" -gt 0 ]; then
-          OVERALL_STATUS="fail"
-        elif [ "$WARN_COUNT" -gt 0 ]; then
-          OVERALL_STATUS="warning"
-        fi
-        
-        echo "=============================="
-        echo "📊 Verification Summary:"
-        echo "Total Checks: $TOTAL_CHECKS"
-        echo "✅ Pass: $PASS_COUNT"
-        echo "⚠️  Warning: $WARN_COUNT"
-        echo "❌ Fail: $FAIL_COUNT"
-        echo "Overall Status: $OVERALL_STATUS"
-        
-        echo "overall_status=$OVERALL_STATUS" >> $GITHUB_OUTPUT
-        echo "pass_count=$PASS_COUNT" >> $GITHUB_OUTPUT
-        echo "fail_count=$FAIL_COUNT" >> $GITHUB_OUTPUT
-        echo "warn_count=$WARN_COUNT" >> $GITHUB_OUTPUT
-    
-    - name: Create verification report
-      run: |
-        VERIFICATION_RESULTS="github/verification-results-$(date +%Y%m%d).json"
-        
-        # Create markdown report
-        REPORT_FILE="github/verification-report-$(date +%Y%m%d).md"
-        
-        cat > "$REPORT_FILE" << EOF
-        # Daily Verification Report - $(date +"%Y-%m-%d")
-        
-        ## Summary
-        - **Overall Status:** ${{ steps.verify.outputs.overall_status }}
-        - **Pass:** ${{ steps.verify.outputs.pass_count }}
-        - **Warning:** ${{ steps.verify.outputs.warn_count }}
-        - **Fail:** ${{ steps.verify.outputs.fail_count }}
-        
-        ## Detailed Results
-        
-        EOF
-        
-        # Add check details
-        jq -r '.checks[] | "### \(.check | ascii_upcase)\n\n**Status:** \(.status)\n**Details:** \(.details | tojson)\n\n"' "$VERIFICATION_RESULTS" >> "$REPORT_FILE"
-        
-        # Add recommendations
-        cat >> "$REPORT_FILE" << EOF
-        
-        ## Recommendations
-        
-        EOF
-        
-        if [ "${{ steps.verify.outputs.overall_status }}" = "fail" ]; then
-          echo "🚨 **IMMEDIATE ACTION REQUIRED:** Fix failing checks before proceeding." >> "$REPORT_FILE"
-        fi
-        
-        if [ "${{ steps.verify.outputs.warn_count }}" -gt 0 ]; then
-          echo "⚠️ **ATTENTION NEEDED:** Address warnings to maintain perfect GitHub hygiene." >> "$REPORT_FILE"
-        fi
-        
-        if [ "${{ steps.verify.outputs.overall_status }}" = "pass" ]; then
-          echo "✅ **ALL SYSTEMS GO:** GitHub protocol compliance is perfect." >> "$REPORT_FILE"
-        fi
-        
-        cat >> "$REPORT_FILE" << EOF
-        
-        ## Next Verification
-        Scheduled: Tomorrow at 9:00 AM PDT (16:00 UTC)
-        
-        ---
-        
-        *This report was automatically generated by the Verification Check workflow.*
-        EOF
-        
-        echo "📄 Verification report created: $REPORT_FILE"
-        
-        # Commit verification results
-        git add "$VERIFICATION_RESULTS" "$REPORT_FILE"
-        git commit -m "[VERIFICATION] Daily check - Status: ${{ steps.verify.outputs.overall_status }}"
-        git push origin main
-        
-        echo "✅ Verification results committed to repository"
-    
-    - name: Notify on failure
-      if: steps.verify.outputs.overall_status == 'fail'
-      run: |
-        echo "🚨 Verification failed! Immediate action required."
-        # In a real implementation, this would send a notification
-        # Example: curl -X POST -H "Content-Type: application/json" -d '{"text":"GitHub verification failed!"}' $SLACK_WEBHOOK_URL
-        echo "Notification would be sent here in production."
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Load verification status
+        id: load-status
+        run: |
+          STATUS_FILE="github/chapter-status.json"
+          if [ ! -f "$STATUS_FILE" ]; then
+            echo '{"chapters": {}}' > "$STATUS_FILE"
+            echo "status_file_created=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "status_file_created=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          CHAPTERS_NEEDING_VERIFICATION=$(jq -r '.chapters | to_entries[] | select(.value.last_action == "draft" or .value.last_action == "verify") | .key' "$STATUS_FILE" 2>/dev/null || echo "")
+          echo "chapters_needing_verification=$CHAPTERS_NEEDING_VERIFICATION" >> "$GITHUB_OUTPUT"
+
+          TOTAL_CHAPTERS=$(jq -r '.chapters | length' "$STATUS_FILE" 2>/dev/null || echo "0")
+          echo "total_chapters=$TOTAL_CHAPTERS" >> "$GITHUB_OUTPUT"
+
+      - name: Run verification checks
+        id: verify
+        run: |
+          echo "🔍 Running Verification Checks"
+          echo "=============================="
+
+          VERIFICATION_RESULTS="github/verification-results-$(date +%Y%m%d).json"
+          echo '{"timestamp": "'$(date -u +"%Y-%m-%dT%H:%M:%SZ")'", "checks": []}' > "$VERIFICATION_RESULTS"
+
+          SIGNAL_LOG="github/signal-log.json"
+          if [ -f "$SIGNAL_LOG" ]; then
+            SIGNAL_COUNT=$(jq '.signals | length' "$SIGNAL_LOG")
+            echo "✅ Signal log: $SIGNAL_COUNT signals"
+            jq --arg check "signal_log" \
+               --arg status "pass" \
+               --arg count "$SIGNAL_COUNT" \
+               '.checks += [{"check": $check, "status": $status, "details": {"signal_count": $count}}]' \
+               "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
+          else
+            echo "❌ Signal log missing"
+            jq --arg check "signal_log" \
+               --arg status "fail" \
+               '.checks += [{"check": $check, "status": $status, "details": {"error": "Signal log file not found"}}]' \
+               "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
+          fi
+
+          STATUS_FILE="github/chapter-status.json"
+          if [ -f "$STATUS_FILE" ]; then
+            CHAPTER_COUNT=$(jq '.chapters | length' "$STATUS_FILE")
+            DRAFT_COUNT=$(jq '.chapters | to_entries[] | select(.value.last_action == "draft") | .key' "$STATUS_FILE" | wc -l)
+            LOCKED_COUNT=$(jq '.chapters | to_entries[] | select(.value.last_action == "lock") | .key' "$STATUS_FILE" | wc -l)
+
+            echo "✅ Chapter status: $CHAPTER_COUNT chapters total"
+            echo "   - Draft: $DRAFT_COUNT"
+            echo "   - Locked: $LOCKED_COUNT"
+
+            jq --arg check "chapter_status" \
+               --arg status "pass" \
+               --arg total "$CHAPTER_COUNT" \
+               --arg draft "$DRAFT_COUNT" \
+               --arg locked "$LOCKED_COUNT" \
+               '.checks += [{"check": $check, "status": $status, "details": {"total": $total, "draft": $draft, "locked": $locked}}]' \
+               "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
+          else
+            echo "❌ Chapter status file missing"
+            jq --arg check "chapter_status" \
+               --arg status "fail" \
+               '.checks += [{"check": $check, "status": $status, "details": {"error": "Chapter status file not found"}}]' \
+               "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
+          fi
+
+          PR_COUNT=$(gh pr list --state open --json number --jq length 2>/dev/null || echo "0")
+          if [ "$PR_COUNT" -gt 0 ]; then
+            echo "⚠️ Open PRs: $PR_COUNT (needs review)"
+            PR_LIST=$(gh pr list --state open --json title,url --jq '.[] | "- [\(.title)](\(.url))"' 2>/dev/null || echo "Could not fetch PR list")
+
+            jq --arg check "open_prs" \
+               --arg status "warning" \
+               --arg count "$PR_COUNT" \
+               --argjson pr_list "$(echo "$PR_LIST" | jq -R -s -c 'split("\n")')" \
+               '.checks += [{"check": $check, "status": $status, "details": {"count": $count, "pr_list": $pr_list}}]' \
+               "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
+          else
+            echo "✅ No open PRs"
+            jq --arg check "open_prs" \
+               --arg status "pass" \
+               '.checks += [{"check": $check, "status": $status, "details": {"count": 0}}]' \
+               "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
+          fi
+
+          BRANCH_COUNT=$(git branch -r | grep -v "origin/main" | grep -v "origin/HEAD" | wc -l)
+          if [ "$BRANCH_COUNT" -gt 10 ]; then
+            echo "⚠️ Many branches: $BRANCH_COUNT (consider cleanup)"
+            jq --arg check "branch_hygiene" \
+               --arg status "warning" \
+               --arg count "$BRANCH_COUNT" \
+               '.checks += [{"check": $check, "status": $status, "details": {"count": $count, "threshold": 10}}]' \
+               "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
+          else
+            echo "✅ Branch hygiene: $BRANCH_COUNT branches"
+            jq --arg check "branch_hygiene" \
+               --arg status "pass" \
+               --arg count "$BRANCH_COUNT" \
+               '.checks += [{"check": $check, "status": $status, "details": {"count": $count}}]' \
+               "$VERIFICATION_RESULTS" > tmp.json && mv tmp.json "$VERIFICATION_RESULTS"
+          fi
+
+          PASS_COUNT=$(jq '.checks | map(select(.status == "pass")) | length' "$VERIFICATION_RESULTS")
+          FAIL_COUNT=$(jq '.checks | map(select(.status == "fail")) | length' "$VERIFICATION_RESULTS")
+          WARN_COUNT=$(jq '.checks | map(select(.status == "warning")) | length' "$VERIFICATION_RESULTS")
+          TOTAL_CHECKS=$(jq '.checks | length' "$VERIFICATION_RESULTS")
+
+          OVERALL_STATUS="pass"
+          if [ "$FAIL_COUNT" -gt 0 ]; then
+            OVERALL_STATUS="fail"
+          elif [ "$WARN_COUNT" -gt 0 ]; then
+            OVERALL_STATUS="warning"
+          fi
+
+          echo "overall_status=$OVERALL_STATUS" >> "$GITHUB_OUTPUT"
+          echo "pass_count=$PASS_COUNT" >> "$GITHUB_OUTPUT"
+          echo "fail_count=$FAIL_COUNT" >> "$GITHUB_OUTPUT"
+          echo "warn_count=$WARN_COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Create verification report
+        run: |
+          VERIFICATION_RESULTS="github/verification-results-$(date +%Y%m%d).json"
+          REPORT_FILE="github/verification-report-$(date +%Y%m%d).md"
+
+          cat > "$REPORT_FILE" << EOF
+          # Daily Verification Report - $(date +"%Y-%m-%d")
+
+          ## Summary
+          - **Overall Status:** ${{ steps.verify.outputs.overall_status }}
+          - **Pass:** ${{ steps.verify.outputs.pass_count }}
+          - **Warning:** ${{ steps.verify.outputs.warn_count }}
+          - **Fail:** ${{ steps.verify.outputs.fail_count }}
+
+          ## Detailed Results
+
+          EOF
+
+          jq -r '.checks[] | "### \(.check | ascii_upcase)\n\n**Status:** \(.status)\n**Details:** \(.details | tojson)\n\n"' "$VERIFICATION_RESULTS" >> "$REPORT_FILE"
+
+          git add "$VERIFICATION_RESULTS" "$REPORT_FILE"
+
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
+          git commit -m "[VERIFICATION] Daily check - Status: ${{ steps.verify.outputs.overall_status }}"
+          git push origin HEAD:main
+
+      - name: Notify on failure
+        if: steps.verify.outputs.overall_status == 'fail'
+        run: echo "Verification failed."
